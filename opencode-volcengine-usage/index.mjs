@@ -143,13 +143,13 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
       {
         type: "api",
         label: "火山引擎 APIG 网关 API Key",
-        placeholder: "api-key-xxxxxxxx",
+        placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
         prompts: [
           {
             type: "text",
             key: "gatewayBaseUrl",
             message: "网关基础地址 (gatewayBaseUrl)",
-            placeholder: "https://gateway.example.com",
+            placeholder: "https://xxxxxxxxxx.apigateway-cn-beijing.volceapi.com",
             validate: (v) => {
               if (!v || !v.trim()) return "网关地址必填"
               try {

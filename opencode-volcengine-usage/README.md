@@ -1,13 +1,13 @@
 # opencode-volcengine-usage
 
-Magpie / OpenCode 供应商插件：**火山引擎 APIG 网关（BlueRegion 架构）**。
+Magpie 供应商插件：**火山引擎 APIG 网关（BlueRegion 架构）**。
 
-把你的网关注册为 magpie 供应商，agent 即可通过 `volcengine/<model>` 访问网关上的模型；同时在 magpie 的额度面板展示个人 Token 用量（今日 / 本月）。
+把你的网关注册为 magpie 供应商，agent 即可通过 `volcengine-apigw/<model>` 访问网关上的模型；同时在 magpie 的额度面板展示个人 Token 用量（今日 / 本月）。
 
 ## 它做什么
 
-- **推理转发**：模型走 OpenAI 兼容的 `/v1/chat/completions`，agent 发来的 Anthropic / Responses / Gemini 请求由 magpie 网关自动转换。
-- **模型列表**：`provider.models` 查询网关 `/v1/models`，按账号列出可用模型及 `credit` 计量倍率（映射到 magpie `rate` 字段）。
+- **推理转发**：模型走 OpenAI 兼容的 `/chat/completions`，agent 发来的 Anthropic / Responses / Gemini 请求由 magpie 网关自动转换。
+- **模型列表**：`provider.models` 查询网关 `/v1/models`，按账号列出可用模型及 `credit` 计量倍率（映射到 magpie `rate` 字段）。静态元数据（context 窗口 / USD 价格 / 推理 / 多模态）由内置 `MODEL_META` 表补充。
 - **用量展示**：`auth.usage` 查询 `/v1/usage/summary`，在 magpie quota 面板显示今日 / 本月的输入 / 输出 / 缓存命中 / 请求数。
 
 ## 前提
@@ -17,35 +17,38 @@ Magpie / OpenCode 供应商插件：**火山引擎 APIG 网关（BlueRegion 架�
 ## 安装
 
 ```bash
-# 文件夹就地加载
+# 从本仓库子目录加载
+git clone https://github.com/CrazyTomatoOo/volcengine-apigw-usage.git
+cd volcengine-apigw-usage
 magpie plugin add ./opencode-volcengine-usage
-
-# 或从 git
-magpie plugin add gitcode:solcao/opencode-volcengine-usage
 ```
 
 ## 登录
 
 ```bash
-magpie plugin login volcengine
+magpie plugin login volcengine-apigw
 ```
 
 会依次询问：
 
-1. **API Key** — 网关签发的个人推理 Key（`api-key-xxxxxxxx` 形式）
-2. **网关基础地址** — 如 `https://gateway.example.com`
+1. **API Key** — 网关签发的个人推理 Key（UUID 形式 `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）
+2. **网关基础地址** — 如 `https://xxxxxxxxxx.apigateway-cn-beijing.volceapi.com`
 
-登录时插件会调 `/v1/models` 校验 Key 并提取 consumer ID 作为账号名。
+> 设计说明：插件**不**在登录阶段调 `client.auth.set` 回写 consumer ID（那会覆盖 auth 对象，导致 loader 拿不到 baseURL/apiKey）。consumer ID 由 `auth.usage` 钩子直接从用量响应中读取，仅用于 quota 面板显示，不参与鉴权。
 
 ## 验证
 
 ```bash
-magpie plugin              # volcengine (火山引擎网关, N models)  signed in
-magpie provider test volcengine
+magpie plugin              # volcengine-apigw (火山引擎 APIG 网关, N models)  signed in
+magpie provider test volcengine-apigw
 magpie quota               # 今日 / 本月 token 用量
 ```
 
-之后 agent 可用 `volcengine/deepseek-v4-pro` 等模型 ID。
+之后 agent 可用 `volcengine-apigw/deepseek-v4-pro` 等模型 ID。
+
+## 支持的模型
+
+16 个，包括 DeepSeek V4 Flash/Pro、GLM 5.2/5.3/5.3-Flash、Doubao Seed 2.1 Pro、Kimi K3、Qwen3.7/3.8 系列等。完整列表见 `index.mjs` 的 `MODEL_META`。
 
 ## 安全模型
 
@@ -69,4 +72,4 @@ magpie quota               # 今日 / 本月 token 用量
 
 ## License
 
-Apache-2.0
+MIT

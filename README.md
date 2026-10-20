@@ -4,7 +4,7 @@
 
 ## 功能
 
-- **推理转发**：通过 OpenAI 兼容的 `/v1/chat/completions` 调用网关后端模型
+- **推理转发**：通过 OpenAI 兼容的 `/chat/completions` 调用网关后端模型（SDK 在 baseURL 后追加该路径；网关同时支持 `/v1/chat/completions`）
 - **动态模型列表**：从网关 `/v1/models` 获取账号可用模型 + credit 计量倍率
 - **用量查询**：在 magpie quota 面板展示今日/本月 token 用量（输入/输出/缓存命中/请求数）
 - **静态元数据富化**：context 窗口、USD 价格、推理/多模态标记来自内置 `MODEL_META` 表
@@ -38,7 +38,7 @@ magpie plugin login volcengine-apigw
 |---|---|
 | `GET /v1/models` | 模型列表 + credit 倍率 |
 | `GET /v1/usage/summary?window=today\|month` | 汇总用量 |
-| `POST /v1/chat/completions` | 推理（magpie 自动调用） |
+| `POST /chat/completions` | 推理（magpie 自动调用，等价于 `/v1/chat/completions`） |
 
 ## 支持的模型
 

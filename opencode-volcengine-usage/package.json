@@ -6,7 +6,7 @@
   "main": "./index.mjs",
   "files": ["index.mjs", "README.md"],
   "keywords": ["opencode", "opencode-plugin", "magpie", "volcengine", "blueregion"],
-  "license": "Apache-2.0",
+  "license": "MIT",
   "magpie": {
     "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/hjeh7pldnulogj/volcengine.png",
     "maxConcurrency": 4
