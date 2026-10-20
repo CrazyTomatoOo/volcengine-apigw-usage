@@ -76,12 +76,12 @@ function buildModels(data) {
     const model = {
       id: m.id,
       name: m.name || m.id,
-      context: meta.context,
-      output: meta.output,
-      inputs: meta.inputs,
-      outputs: ["text"],
+      // 标准模型结构：context/output 放 limit，input 放 modalities
+      // （顶层 context/output 会被某些版本忽略，limit 才是规范字段）
+      limit: { context: meta.context, output: meta.output },
+      modalities: { input: meta.inputs, output: ["text"] },
+      // 顶层简化字段（5 分钟示例写法，magpie 接受）
       reasoning: meta.reasoning,
-      image: meta.image,
       tool_call: true,
     }
     // cost：美元价（USD / 1M tokens），来自 pi 配置，无则省略
@@ -102,9 +102,18 @@ async function fetchSummary(base, key, window) {
     headers: { authorization: `Bearer ${key}` },
     signal: AbortSignal.timeout(8000),
   })
+  // 401/403：Key 失效，抛带 signIn 的错误，让 usage 钩子精确标记账号
+  if (res.status === 401 || res.status === 403) {
+    throw Object.assign(new Error(`Key 失效 (${res.status})`), { signIn: "expired" })
+  }
   if (!res.ok) return null
   const body = await res.json()
   return body?.data ? body : null
+}
+
+// 窗口长度（秒）：today=当日，month≈30 天
+function windowSpan(name) {
+  return name.startsWith("今日") ? 86400 : 30 * 86400
 }
 
 function buildWindow(name, summary) {
@@ -118,7 +127,9 @@ function buildWindow(name, summary) {
     display: `输入 ${fmtTokens(d.req_tokens)} · 输出 ${fmtTokens(d.rsp_tokens)} · 缓存命中 ${fmtTokens(d.cached_tokens)} (${hitRate}) · ${d.request_count} 请求`,
     amount: d.total_tokens,
     unit: "tokens",
-    aside: false, // 用完不影响推理（按量计费，非套餐额度）
+    span: windowSpan(name), // 窗口长度（秒），让面板显示时间范围
+    // 按量计费无 limit：不设 used/limit，aside:true 表示用完不影响推理
+    aside: true,
   }
 }
 
@@ -193,6 +204,17 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
         fetchSummary(base, key, "today"),
         fetchSummary(base, key, "month"),
       ])
+      // 任一返回 401/403 → Key 失效，精确标记账号需重新登录
+      const signInExpired = [todayR, monthR].some(
+        (r) => r.status === "rejected" && r.reason?.signIn === "expired"
+      )
+      if (signInExpired) {
+        return {
+          error: "Key 失效，请重新登录",
+          signIn: "expired",
+          windows: [],
+        }
+      }
       const today = todayR.status === "fulfilled" ? todayR.value : null
       const month = monthR.status === "fulfilled" ? monthR.value : null
 
