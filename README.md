@@ -1,57 +1,76 @@
-# volcengine-apigw-usage
+# volcengine-apigw
 
-火山引擎 APIG 网关的 Magpie 插件：把 BlueRegion 架构的推理网关注册为 magpie 供应商，并提供 token 用量查询。
+Magpie 供应商插件：**火山引擎 APIG 网关（BlueRegion 架构）**。
 
-## 功能
+把你的网关注册为 magpie 供应商，agent 即可通过 `volcengine-apigw/<model>` 访问网关上的模型；同时在 magpie 的额度面板展示个人 Token 用量（今日 / 本月）。
 
-- **推理转发**：通过 OpenAI 兼容的 `/chat/completions` 调用网关后端模型（SDK 在 baseURL 后追加该路径；网关同时支持 `/v1/chat/completions`）
-- **动态模型列表**：从网关 `/v1/models` 获取账号可用模型 + credit 计量倍率
-- **用量查询**：在 magpie quota 面板展示今日/本月 token 用量（输入/输出/缓存命中/请求数）
-- **静态元数据富化**：context 窗口、USD 价格、推理/多模态标记来自内置 `MODEL_META` 表
+## 它做什么
 
-## 安全模型
-
-与 [BlueRegionUsage](https://gitcode.com/solcao/BlueRegionUsage) 一致：
-
-- 用户持有自己的推理 API Key → 网关 key-auth 校验后注入 consumer ID
-- 函数只以 consumer ID 过滤 PromQL，用户天然只能查到自己的数据
-- 插件只做客户端转发，凭证不离开用户机器
+- **推理转发**：模型走 OpenAI 兼容的 `/chat/completions`，agent 发来的 Anthropic / Responses / Gemini 请求由 magpie 网关自动转换。
+- **模型列表**：`provider.models` 查询网关 `/v1/models`，按账号列出可用模型及 `credit` 计量倍率（映射到 magpie `rate` 字段）。静态元数据（context 窗口 / USD 价格 / 推理 / 多模态）由内置 `MODEL_META` 表补充。
+- **用量展示**：`auth.usage` 查询 `/v1/usage/summary`，在 magpie quota 面板显示今日 / 本月的输入 / 输出 / 缓存命中 / 请求数。
 
 ## 前提
 
-网关上需已部署 BlueRegionUsage 的 `/v1/usage/*` 函数路由。未部署时推理不受影响，用量查询会降级为错误提示。
+网关上已部署 [BlueRegionUsage](https://gitcode.com/solcao/BlueRegionUsage) 的 `/v1/usage/*` 函数路由。未部署时不影响推理，仅用量展示降级为错误提示。
 
 ## 安装
 
 ```bash
-magpie plugin add /path/to/volcengine-apigw
+# 从 GitHub 直接安装（推荐）
+magpie plugin add github:CrazyTomatoOo/volcengine-apigw-usage
+
+# 或克隆后本地加载
+git clone https://github.com/CrazyTomatoOo/volcengine-apigw-usage.git
+magpie plugin add ./volcengine-apigw-usage
+```
+
+## 登录
+
+```bash
 magpie plugin login volcengine-apigw
 ```
 
-登录时会询问：
-1. **网关基础地址**（gatewayBaseUrl）：如 `https://xxx.apigateway-cn-beijing.volceapi.com`
-2. **API Key**：网关推理 Key（UUID 形式）
+会依次询问：
 
-## 用量接口
+1. **API Key** — 网关签发的个人推理 Key（UUID 形式 `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）
+2. **网关基础地址** — 如 `https://xxxxxxxxxx.apigateway-cn-beijing.volceapi.com`
 
-| 端点 | 用途 |
-|---|---|
-| `GET /v1/models` | 模型列表 + credit 倍率 |
-| `GET /v1/usage/summary?window=today\|month` | 汇总用量 |
-| `POST /chat/completions` | 推理（magpie 自动调用，等价于 `/v1/chat/completions`） |
+> 设计说明：插件**不**在登录阶段调 `client.auth.set` 回写 consumer ID（那会覆盖 auth 对象，导致 loader 拿不到 baseURL/apiKey）。consumer ID 由 `auth.usage` 钩子直接从用量响应中读取，仅用于 quota 面板显示，不参与鉴权。
+
+## 验证
+
+```bash
+magpie plugin              # volcengine-apigw (火山引擎 APIG 网关, N models)  signed in
+magpie provider test volcengine-apigw
+magpie quota               # 今日 / 本月 token 用量
+```
+
+之后 agent 可用 `volcengine-apigw/deepseek-v4-pro` 等模型 ID。
 
 ## 支持的模型
 
-16 个，包括 DeepSeek V4 Flash/Pro、GLM 5.2/5.3/5.3-Flash、Doubao Seed 2.1 Pro、Kimi K3、Qwen3.7/3.8 系列等。完整列表见 `volcengine-apigw/index.mjs` 的 `MODEL_META`。
+16 个，包括 DeepSeek V4 Flash/Pro、GLM 5.2/5.3/5.3-Flash、Doubao Seed 2.1 Pro、Kimi K3、Qwen3.7/3.8 系列等。完整列表见 `index.mjs` 的 `MODEL_META`。
 
-## 目录结构
+## 安全模型
 
-```
-volcengine-apigw/             # magpie 插件
-  index.mjs                  # 插件主体
-  package.json               # npm 包定义
-  README.md                  # 插件文档
-```
+与 BlueRegionUsage 一致：
+
+- 用户 API Key 在网关 key-auth 层校验后注入 consumer ID，**凭证止于网关**
+- 用量函数只以 consumer ID 作 PromQL 过滤，用户天然只能查到自己的数据
+- 本插件只做客户端转发，凭证不离开用户机器
+- `plugin-auth.json` 权限 600，与 OpenCode / magpie 其他插件相同
+
+## 配置文件
+
+| 文件 | 内容 |
+|------|------|
+| `~/.config/magpie/plugin-auth.json` | 登录信息（Key + gatewayBaseUrl，权限 600） |
+| `~/.config/magpie/plugin-providers.json` | 插件列出的供应商和模型缓存 |
+
+## 选项
+
+无。网关地址和 API Key 在登录时提供。
 
 ## License
 
