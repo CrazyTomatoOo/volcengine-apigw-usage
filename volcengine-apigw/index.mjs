@@ -1,5 +1,5 @@
 /**
- * opencode-volcengine-usage — Magpie 供应商插件
+ * volcengine-apigw — Magpie 供应商插件
  *
  * 把火山引擎 APIG 网关（BlueRegion 架构）注册为 magpie 供应商：
  *   - 推理请求走 OpenAI 兼容的 /v1/chat/completions

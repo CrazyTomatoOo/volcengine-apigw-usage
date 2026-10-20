@@ -24,7 +24,7 @@
 ## 安装
 
 ```bash
-magpie plugin add /path/to/opencode-volcengine-usage
+magpie plugin add /path/to/volcengine-apigw
 magpie plugin login volcengine-apigw
 ```
 
@@ -42,12 +42,12 @@ magpie plugin login volcengine-apigw
 
 ## 支持的模型
 
-16 个，包括 DeepSeek V4 Flash/Pro、GLM 5.2/5.3/5.3-Flash、Doubao Seed 2.1 Pro、Kimi K3、Qwen3.7/3.8 系列等。完整列表见 `opencode-volcengine-usage/index.mjs` 的 `MODEL_META`。
+16 个，包括 DeepSeek V4 Flash/Pro、GLM 5.2/5.3/5.3-Flash、Doubao Seed 2.1 Pro、Kimi K3、Qwen3.7/3.8 系列等。完整列表见 `volcengine-apigw/index.mjs` 的 `MODEL_META`。
 
 ## 目录结构
 
 ```
-opencode-volcengine-usage/   # magpie 插件
+volcengine-apigw/             # magpie 插件
   index.mjs                  # 插件主体
   package.json               # npm 包定义
   README.md                  # 插件文档

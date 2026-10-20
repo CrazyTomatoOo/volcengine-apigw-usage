@@ -1,4 +1,4 @@
-# opencode-volcengine-usage
+# volcengine-apigw
 
 Magpie 供应商插件：**火山引擎 APIG 网关（BlueRegion 架构）**。
 
@@ -20,7 +20,7 @@ Magpie 供应商插件：**火山引擎 APIG 网关（BlueRegion 架构）**。
 # 从本仓库子目录加载
 git clone https://github.com/CrazyTomatoOo/volcengine-apigw-usage.git
 cd volcengine-apigw-usage
-magpie plugin add ./opencode-volcengine-usage
+magpie plugin add ./volcengine-apigw
 ```
 
 ## 登录

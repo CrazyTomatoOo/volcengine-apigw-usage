@@ -1,5 +1,5 @@
 {
-  "name": "opencode-volcengine-usage",
+  "name": "volcengine-apigw",
   "version": "0.1.0",
   "description": "Magpie provider plugin: 火山引擎网关 (BlueRegion) — inference + personal usage query",
   "type": "module",
