@@ -1,6 +1,6 @@
 {
   "name": "volcengine-apigw",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Magpie provider plugin: 火山引擎 APIG 网关 (BlueRegion 架构) — inference + personal usage query",
   "type": "module",
   "main": "./index.mjs",

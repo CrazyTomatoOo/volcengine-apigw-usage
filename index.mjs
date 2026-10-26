@@ -17,7 +17,7 @@
  */
 
 const PROVIDER = "volcengine-apigw"
-const PLUGIN_VERSION = "0.1.0"
+const PLUGIN_VERSION = "0.1.1"
 
 // ---- 数值格式化（万/亿，中文风格）----
 
@@ -29,9 +29,15 @@ function fmtTokens(n) {
   return String(Math.round(n))
 }
 
-function gatewayBase(auth) {
-  const base = (auth?.metadata?.gatewayBaseUrl || "").trim().replace(/\/+$/, "")
-  return base
+// 网关 API 根地址（带 /v1）：https://<id>.apigateway-cn-beijing.volceapi.com/v1
+// openai-compatible 只把 baseURL 与 "/chat/completions" 拼起来，不会补 /v1；
+// 网关对裸 /chat/completions 的所有模型都回 404 model_not_found（2026-10-26 实测），
+// 所以 baseURL 必须显式带 /v1。/v1/models、/v1/usage/* 同理。
+function apiBase(auth) {
+  const raw = (auth?.metadata?.gatewayBaseUrl || "").trim().replace(/\/+$/, "")
+  if (!raw) return ""
+  // 用户可能把 /v1 一起粘进来：先剥掉再统一拼一次，避免 /v1/v1
+  return `${raw.replace(/\/v1$/i, "")}/v1`
 }
 
 // 静态模型元数据（来源：本机 pi 的 volcengine-apigw/* 配置）
@@ -98,7 +104,7 @@ function buildModels(data) {
 // ---- 查询 /v1/usage/summary 并构造 magpie usage 窗口 ----
 
 async function fetchSummary(base, key, window) {
-  const res = await fetch(`${base}/v1/usage/summary?window=${window}`, {
+  const res = await fetch(`${base}/usage/summary?window=${window}`, {
     headers: { authorization: `Bearer ${key}` },
     signal: AbortSignal.timeout(8000),
   })
@@ -178,12 +184,11 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
     ],
 
     // 每个账号的请求：baseURL + apiKey（openai-compatible 自动发 Bearer）
-    // baseURL 用网关根地址：SDK 会拼 /chat/completions，
-    // 火山网关对 /chat/completions 和 /v1/chat/completions 都路由到推理后端。
+    // baseURL 必须带 /v1（见 apiBase）：SDK 在其后拼 /chat/completions。
     async loader(getAuth) {
       const auth = await getAuth()
       if (auth?.type !== "api") return {}
-      const base = gatewayBase(auth)
+      const base = apiBase(auth)
       if (!base) return {}
       return {
         baseURL: base,
@@ -196,7 +201,7 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
     async usage(getAuth) {
       const auth = await getAuth()
       if (auth?.type !== "api") return { error: "未登录", windows: [] }
-      const base = gatewayBase(auth)
+      const base = apiBase(auth)
       if (!base) return { error: "缺少网关地址（重新登录配置）", windows: [] }
 
       const key = auth.key
@@ -244,10 +249,10 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
     id: PROVIDER,
     async models(provider, { auth } = {}) {
       if (auth?.type !== "api") return provider.models
-      const base = gatewayBase(auth)
+      const base = apiBase(auth)
       if (!base) return provider.models
       try {
-        const res = await fetch(`${base}/v1/models`, {
+        const res = await fetch(`${base}/models`, {
           headers: { authorization: `Bearer ${auth.key}` },
           signal: AbortSignal.timeout(10000),
         })
