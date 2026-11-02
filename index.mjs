@@ -16,8 +16,10 @@
  *   未部署时 auth.usage 降级为错误提示，不影响推理。
  */
 
+import { readFileSync } from "node:fs"
+
 const PROVIDER = "volcengine-apigw"
-const PLUGIN_VERSION = "0.1.1"
+const PLUGIN_VERSION = "0.2.0"
 
 // ---- 数值格式化（万/亿，中文风格）----
 
@@ -117,25 +119,218 @@ async function fetchSummary(base, key, window) {
   return body?.data ? body : null
 }
 
+// 拉取 /v1/usage/by-model，返回行数组或 null（失败时优雅降级）
+async function fetchByModel(base, key, window) {
+  try {
+    const res = await fetch(`${base}/usage/by-model?window=${window}`, {
+      headers: { authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!res.ok) return null
+    const body = await res.json()
+    return Array.isArray(body?.data) ? body.data : null
+  } catch {
+    return null
+  }
+}
+
+// 拉取 /v1/models 并整理成 Map<id, {id, credit, creditHistory}>
+async function fetchModelCatalog(base, key) {
+  try {
+    const res = await fetch(`${base}/models`, {
+      headers: { authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) return null
+    const body = await res.json()
+    const out = new Map()
+    for (const m of Array.isArray(body?.data) ? body.data : []) {
+      if (!m || typeof m.id !== "string") continue
+      const hist = []
+      if (Array.isArray(m.credit_history)) {
+        for (const e of m.credit_history) {
+          if (e && typeof e.from === "string" && typeof e.credit === "number") {
+            hist.push({ from: e.from, credit: e.credit })
+          }
+        }
+        hist.sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0))
+      }
+      out.set(m.id, {
+        id: m.id,
+        credit: typeof m.credit === "number" ? m.credit : null,
+        creditHistory: hist,
+      })
+    }
+    return out
+  } catch {
+    return null
+  }
+}
+
+// 某天生效的系数：历史中最后一条 from <= 当天；无历史回退当前系数
+function creditOn(entry, dateStr) {
+  const hist = entry.creditHistory
+  if (hist && hist.length && dateStr) {
+    let v = null
+    for (const e of hist) {
+      if (e.from <= dateStr) v = e.credit
+      else break
+    }
+    return v
+  }
+  return entry.credit
+}
+
+// 单模型 Credit 估算：有 daily 按日分段，否则总量 × 当前系数
+function modelCreditUsage(row, catalog) {
+  let sum = 0
+  let has = false
+  if (row.daily && row.daily.length) {
+    for (const d of row.daily) {
+      const entry = catalog.get(row.model)
+      const c = entry ? creditOn(entry, d.date) : null
+      if (c !== null) {
+        has = true
+        sum += ((d.total_tokens || 0) * c) / 1e6
+      }
+    }
+    if (has) return sum
+    return null
+  }
+  const entry = catalog.get(row.model)
+  const c = entry ? creditOn(entry, null) : null
+  return c !== null ? ((row.total_tokens || 0) * c) / 1e6 : null
+}
+
+// 窗口 Credit 汇总：优先用服务端行级 credit，否则用目录系数反算
+function creditFromRows(rows, catalog) {
+  let direct = 0
+  let hasDirect = false
+  for (const r of rows) {
+    if (typeof r.credit === "number") {
+      hasDirect = true
+      direct += r.credit
+    }
+  }
+  if (hasDirect) return direct
+  if (!catalog) return null
+  let sum = 0
+  let has = false
+  for (const r of rows) {
+    const v = modelCreditUsage(r, catalog)
+    if (v !== null) {
+      has = true
+      sum += v
+    }
+  }
+  return has ? sum : null
+}
+
+// 读取用户级 bru-usage 配置（不存在/损坏返回空对象）
+function readUserBruConfig() {
+  try {
+    const env = process.env || {}
+    const base = env.XDG_CONFIG_HOME || (env.HOME ? env.HOME + "/.config" : "")
+    if (!base) return {}
+    const parsed = JSON.parse(readFileSync(`${base}/bru-usage/config.json`, "utf8"))
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+// 根据窗口名读取用户配置的 Credit 限额（>0 有效）
+function readCreditLimit(windowName) {
+  const user = readUserBruConfig()
+  const env = process.env || {}
+  if (windowName.startsWith("今日")) {
+    return toLimit(user.dailyCreditLimit) ?? toLimit(env.BRU_DAILY_CREDIT_LIMIT)
+  }
+  if (windowName.startsWith("本月")) {
+    return toLimit(user.monthlyCreditLimit) ?? toLimit(env.BRU_MONTHLY_CREDIT_LIMIT)
+  }
+  return null
+}
+
+function toLimit(v) {
+  if (v === undefined || v === null || v === "") return null
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 // 窗口长度（秒）：today=当日，month≈30 天
 function windowSpan(name) {
   return name.startsWith("今日") ? 86400 : 30 * 86400
 }
 
-function buildWindow(name, summary) {
+function buildWindow(name, summary, credit, limit) {
   if (!summary?.data) return null
   const d = summary.data
   const hitRate = d.cache_hit_rate != null
     ? (d.cache_hit_rate * 100).toFixed(1) + "%"
     : "—"
+  const display = `Credit ${credit != null ? credit.toFixed(2) : "—"} · 输入 ${fmtTokens(d.req_tokens)} · 输出 ${fmtTokens(d.rsp_tokens)} · 缓存命中 ${fmtTokens(d.cached_tokens)} (${hitRate}) · ${d.request_count} 请求`
+
+  // 有限额：显示真实百分比
+  if (limit > 0 && credit != null) {
+    return {
+      name,
+      display,
+      used: Math.max(0, Math.min(100, (credit / limit) * 100)),
+      limit,
+      amount: credit,
+      unit: "credits",
+      span: windowSpan(name),
+    }
+  }
+
+  // 无限额但有 Credit：用半环占位，展示实际 display 文本，避免 "还没用过"
+  if (credit != null && credit > 0) {
+    return {
+      name,
+      display,
+      used: 50,
+      text: "credit",
+      amount: credit,
+      unit: "credits",
+      span: windowSpan(name),
+    }
+  }
+
+  // 无限额且 Credit 为 0： genuinely 未使用
+  if (credit != null && credit === 0) {
+    return {
+      name,
+      display,
+      used: 0,
+      text: "credit",
+      amount: 0,
+      unit: "credits",
+      span: windowSpan(name),
+    }
+  }
+
+  // by-model 不可用：退回 tokens，但有 token 时不显示 0%/"还没用过"
+  if (d.total_tokens > 0) {
+    return {
+      name,
+      display,
+      used: 50,
+      text: "credit",
+      amount: d.total_tokens,
+      unit: "tokens",
+      span: windowSpan(name),
+    }
+  }
+
   return {
     name,
-    display: `输入 ${fmtTokens(d.req_tokens)} · 输出 ${fmtTokens(d.rsp_tokens)} · 缓存命中 ${fmtTokens(d.cached_tokens)} (${hitRate}) · ${d.request_count} 请求`,
-    amount: d.total_tokens,
+    display,
+    used: 0,
+    text: "credit",
+    amount: 0,
     unit: "tokens",
-    span: windowSpan(name), // 窗口长度（秒），让面板显示时间范围
-    // 按量计费无 limit：不设 used/limit，aside:true 表示用完不影响推理
-    aside: true,
+    span: windowSpan(name),
   }
 }
 
@@ -205,9 +400,12 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
       if (!base) return { error: "缺少网关地址（重新登录配置）", windows: [] }
 
       const key = auth.key
-      const [todayR, monthR] = await Promise.allSettled([
+      const [todayR, monthR, todayByModelR, monthByModelR, catalogR] = await Promise.allSettled([
         fetchSummary(base, key, "today"),
         fetchSummary(base, key, "month"),
+        fetchByModel(base, key, "today"),
+        fetchByModel(base, key, "month"),
+        fetchModelCatalog(base, key),
       ])
       // 任一返回 401/403 → Key 失效，精确标记账号需重新登录
       const signInExpired = [todayR, monthR].some(
@@ -230,9 +428,13 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
         return { error: err, windows: [] }
       }
 
+      const catalog = catalogR.status === "fulfilled" ? catalogR.value : null
+      const todayCredit = todayByModelR.status === "fulfilled" ? creditFromRows(todayByModelR.value, catalog) : null
+      const monthCredit = monthByModelR.status === "fulfilled" ? creditFromRows(monthByModelR.value, catalog) : null
+
       const windows = []
-      const todayW = today && buildWindow("今日 (UTC+8)", today)
-      const monthW = month && buildWindow("本月 (UTC+8)", month)
+      const todayW = today && buildWindow("今日 (UTC+8)", today, todayCredit, readCreditLimit("今日"))
+      const monthW = month && buildWindow("本月 (UTC+8)", month, monthCredit, readCreditLimit("本月"))
       if (todayW) windows.push(todayW)
       if (monthW) windows.push(monthW)
 

@@ -8,7 +8,7 @@ Magpie 供应商插件：**火山引擎 APIG 网关（BlueRegion 架构）**。
 
 - **推理转发**：模型走 OpenAI 兼容的 `/chat/completions`，agent 发来的 Anthropic / Responses / Gemini 请求由 magpie 网关自动转换。
 - **模型列表**：`provider.models` 查询网关 `/v1/models`，按账号列出可用模型及 `credit` 计量倍率（映射到 magpie `rate` 字段）。静态元数据（context 窗口 / USD 价格 / 推理 / 多模态）由内置 `MODEL_META` 表补充。
-- **用量展示**：`auth.usage` 查询 `/v1/usage/summary`，在 magpie quota 面板显示今日 / 本月的输入 / 输出 / 缓存命中 / 请求数。
+- **用量展示**：`auth.usage` 并发查询 `/v1/usage/summary` + `/v1/usage/by-model` + `/v1/models`，在 magpie quota 面板显示今日 / 本月的 Credit 用量（估算）+ 输入 / 输出 / 缓存命中 / 请求数明细。配置 Credit 限额后展示真实百分比，未配置时半环占位并展示明细文本。
 
 ## 前提
 
@@ -73,6 +73,29 @@ magpie quota               # 今日 / 本月 token 用量
 ## 选项
 
 无。网关地址和 API Key 在登录时提供。
+
+### Credit 限额（可选）
+
+magpie quota 面板按百分比渲染进度环。BlueRegionUsage 是按量计费、无内置额度上限，所以插件以 **Credit**（网关服务端按各模型计量系数算出的估算用量）作为面板指标：
+
+- **未配置限额**：面板显示半环占位 + `Credit X · 输入… · 输出… · 缓存命中… · N 请求` 明细文本，不显示 "还没用过"，不触发红色告警。
+- **配置限额后**：面板按 `Credit / 限额 × 100%` 显示真实百分比与进度条，超 90% 触发红色告警。
+
+限额读取优先级（与 [BlueRegionUsage opencode 插件](https://gitcode.com/solcao/BlueRegionUsage) 共用同一份配置）：
+
+1. `~/.config/bru-usage/config.json`（JSON，字段 `dailyCreditLimit` / `monthlyCreditLimit`，数值或 `null`）
+2. 环境变量 `BRU_DAILY_CREDIT_LIMIT` / `BRU_MONTHLY_CREDIT_LIMIT`
+
+示例 `~/.config/bru-usage/config.json`：
+
+```json
+{
+  "dailyCreditLimit": 50,
+  "monthlyCreditLimit": 500
+}
+```
+
+留空某维度（`null` 或不设）则该窗口走半环占位。Credit 系数与分段历史由网关 `/v1/models` 返回，`/v1/usage/by-model` 每行携带服务端算好的窗口 Credit；旧后端无行级 Credit 时回退到目录系数 × 逐日 token 反算。
 
 ## License
 
