@@ -106,29 +106,45 @@ function buildModels(data) {
 // ---- 查询 /v1/usage/summary 并构造 magpie usage 窗口 ----
 
 async function fetchSummary(base, key, window) {
-  const res = await fetch(`${base}/usage/summary?window=${window}`, {
-    headers: { authorization: `Bearer ${key}` },
-    signal: AbortSignal.timeout(8000),
-  })
-  // 401/403：Key 失效，抛带 signIn 的错误，让 usage 钩子精确标记账号
-  if (res.status === 401 || res.status === 403) {
-    throw Object.assign(new Error(`Key 失效 (${res.status})`), { signIn: "expired" })
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch(`${base}/usage/summary?window=${window}`, {
+      headers: { authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(8000),
+    })
+    // 401/403：Key 失效，抛带 signIn 的错误，让 usage 钩子精确标记账号
+    if (res.status === 401 || res.status === 403) {
+      throw Object.assign(new Error(`Key 失效 (${res.status})`), { signIn: "expired" })
+    }
+    // 429/5xx：重试一次（网关多账号并发刷新时可能限流）
+    if ((res.status === 429 || res.status >= 500) && attempt === 0) {
+      await new Promise((r) => setTimeout(r, 400))
+      continue
+    }
+    if (!res.ok) return null
+    const body = await res.json()
+    return body?.data ? body : null
   }
-  if (!res.ok) return null
-  const body = await res.json()
-  return body?.data ? body : null
+  return null
 }
 
 // 拉取 /v1/usage/by-model，返回行数组或 null（失败时优雅降级）
 async function fetchByModel(base, key, window) {
   try {
-    const res = await fetch(`${base}/usage/by-model?window=${window}`, {
-      headers: { authorization: `Bearer ${key}` },
-      signal: AbortSignal.timeout(8000),
-    })
-    if (!res.ok) return null
-    const body = await res.json()
-    return Array.isArray(body?.data) ? body.data : null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetch(`${base}/usage/by-model?window=${window}`, {
+        headers: { authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(8000),
+      })
+      if (res.status === 401 || res.status === 403) return null
+      if ((res.status === 429 || res.status >= 500) && attempt === 0) {
+        await new Promise((r) => setTimeout(r, 400))
+        continue
+      }
+      if (!res.ok) return null
+      const body = await res.json()
+      return Array.isArray(body?.data) ? body.data : null
+    }
+    return null
   } catch {
     return null
   }
@@ -204,6 +220,7 @@ function modelCreditUsage(row, catalog) {
 
 // 窗口 Credit 汇总：优先用服务端行级 credit，否则用目录系数反算
 function creditFromRows(rows, catalog) {
+  if (!Array.isArray(rows)) return null
   let direct = 0
   let hasDirect = false
   for (const r of rows) {
@@ -393,6 +410,8 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
     },
 
     // magpie 自有钩子：查询本月/今日 token 用量展示在 quota 面板
+    // 两阶段并发：先拉 summary（必需），成功后再拉 by-model + catalog（用于 Credit），
+    // 避免多账号同时刷新时 25 路并发压垮网关
     async usage(getAuth) {
       const auth = await getAuth()
       if (auth?.type !== "api") return { error: "未登录", windows: [] }
@@ -400,12 +419,10 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
       if (!base) return { error: "缺少网关地址（重新登录配置）", windows: [] }
 
       const key = auth.key
-      const [todayR, monthR, todayByModelR, monthByModelR, catalogR] = await Promise.allSettled([
+      // 第一阶段：summary（必需，失败直接报错）
+      const [todayR, monthR] = await Promise.allSettled([
         fetchSummary(base, key, "today"),
         fetchSummary(base, key, "month"),
-        fetchByModel(base, key, "today"),
-        fetchByModel(base, key, "month"),
-        fetchModelCatalog(base, key),
       ])
       // 任一返回 401/403 → Key 失效，精确标记账号需重新登录
       const signInExpired = [todayR, monthR].some(
@@ -428,6 +445,12 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
         return { error: err, windows: [] }
       }
 
+      // 第二阶段：by-model + catalog（用于 Credit，失败优雅降级）
+      const [todayByModelR, monthByModelR, catalogR] = await Promise.allSettled([
+        fetchByModel(base, key, "today"),
+        fetchByModel(base, key, "month"),
+        fetchModelCatalog(base, key),
+      ])
       const catalog = catalogR.status === "fulfilled" ? catalogR.value : null
       const todayCredit = todayByModelR.status === "fulfilled" ? creditFromRows(todayByModelR.value, catalog) : null
       const monthCredit = monthByModelR.status === "fulfilled" ? creditFromRows(monthByModelR.value, catalog) : null
