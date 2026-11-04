@@ -263,6 +263,9 @@ function readCreditLimit(windowName) {
   if (windowName.startsWith("今日")) {
     return toLimit(user.dailyCreditLimit) ?? toLimit(env.BRU_DAILY_CREDIT_LIMIT)
   }
+  if (windowName.startsWith("本周")) {
+    return toLimit(user.weeklyCreditLimit) ?? toLimit(env.BRU_WEEKLY_CREDIT_LIMIT)
+  }
   if (windowName.startsWith("本月")) {
     return toLimit(user.monthlyCreditLimit) ?? toLimit(env.BRU_MONTHLY_CREDIT_LIMIT)
   }
@@ -275,9 +278,11 @@ function toLimit(v) {
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
-// 窗口长度（秒）：today=当日，month≈30 天
+// 窗口长度（秒）：today=当日，week=7 天，month≈30 天
 function windowSpan(name) {
-  return name.startsWith("今日") ? 86400 : 30 * 86400
+  if (name.startsWith("今日")) return 86400
+  if (name.startsWith("本周")) return 7 * 86400
+  return 30 * 86400
 }
 
 function buildWindow(name, summary, credit, limit) {
@@ -420,12 +425,13 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
 
       const key = auth.key
       // 第一阶段：summary（必需，失败直接报错）
-      const [todayR, monthR] = await Promise.allSettled([
+      const [todayR, weekR, monthR] = await Promise.allSettled([
         fetchSummary(base, key, "today"),
+        fetchSummary(base, key, "week"),
         fetchSummary(base, key, "month"),
       ])
       // 任一返回 401/403 → Key 失效，精确标记账号需重新登录
-      const signInExpired = [todayR, monthR].some(
+      const signInExpired = [todayR, weekR, monthR].some(
         (r) => r.status === "rejected" && r.reason?.signIn === "expired"
       )
       if (signInExpired) {
@@ -436,9 +442,10 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
         }
       }
       const today = todayR.status === "fulfilled" ? todayR.value : null
+      const week = weekR.status === "fulfilled" ? weekR.value : null
       const month = monthR.status === "fulfilled" ? monthR.value : null
 
-      if (!today && !month) {
+      if (!today && !week && !month) {
         const err = todayR.status === "rejected"
           ? `用量接口不可达: ${todayR.reason?.message || todayR.reason}`
           : "用量接口未部署或返回错误（/v1/usage/summary）"
@@ -446,24 +453,28 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
       }
 
       // 第二阶段：by-model + catalog（用于 Credit，失败优雅降级）
-      const [todayByModelR, monthByModelR, catalogR] = await Promise.allSettled([
+      const [todayByModelR, weekByModelR, monthByModelR, catalogR] = await Promise.allSettled([
         fetchByModel(base, key, "today"),
+        fetchByModel(base, key, "week"),
         fetchByModel(base, key, "month"),
         fetchModelCatalog(base, key),
       ])
       const catalog = catalogR.status === "fulfilled" ? catalogR.value : null
       const todayCredit = todayByModelR.status === "fulfilled" ? creditFromRows(todayByModelR.value, catalog) : null
+      const weekCredit = weekByModelR.status === "fulfilled" ? creditFromRows(weekByModelR.value, catalog) : null
       const monthCredit = monthByModelR.status === "fulfilled" ? creditFromRows(monthByModelR.value, catalog) : null
 
       const windows = []
       const todayW = today && buildWindow("今日 (UTC+8)", today, todayCredit, readCreditLimit("今日"))
+      const weekW = week && buildWindow("本周 (UTC+8)", week, weekCredit, readCreditLimit("本周"))
       const monthW = month && buildWindow("本月 (UTC+8)", month, monthCredit, readCreditLimit("本月"))
       if (todayW) windows.push(todayW)
+      if (weekW) windows.push(weekW)
       if (monthW) windows.push(monthW)
 
       return {
         plan: "火山引擎 APIG 网关",
-        user: auth.accountId || today?.consumer || month?.consumer,
+        user: auth.accountId || today?.consumer || week?.consumer || month?.consumer,
         windows,
       }
     },
