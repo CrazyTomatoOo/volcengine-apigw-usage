@@ -19,7 +19,7 @@
 import { readFileSync } from "node:fs"
 
 const PROVIDER = "volcengine-apigw"
-const PLUGIN_VERSION = "0.2.1"
+const PLUGIN_VERSION = "0.3.0"
 
 // ---- 数值格式化（万/亿，中文风格）----
 
