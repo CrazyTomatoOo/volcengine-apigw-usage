@@ -50,6 +50,23 @@ magpie quota               # 今日 / 本月 token 用量
 
 之后 agent 可用 `volcengine-apigw/deepseek-v4-pro` 等模型 ID。
 
+## Anthropic 协议提供者
+
+插件同时导出 `volcengine-apigw-anthropic` 提供者，用于需要 Anthropic Messages 协议的场景。
+
+```bash
+magpie plugin login volcengine-apigw-anthropic
+```
+
+登录信息要求与 OpenAI 协议提供者完全相同：同一个网关、同一个 API Key、`gatewayBaseUrl` 也填同一个地址。
+
+差异：
+
+- 推理请求发往 `/v1/messages`（Anthropic Messages 格式），而不是 `/v1/chat/completions`
+- 底层 SDK 为 `@ai-sdk/anthropic`
+- 由于 magpie 按提供者隔离认证，必须分别登录 `volcengine-apigw` 和 `volcengine-apigw-anthropic`，各输入一次相同 Key 和网关地址
+- `auth.usage` 用量窗口在两个提供者上独立显示
+
 ## 支持的模型
 
 16 个，包括 DeepSeek V4 Flash/Pro、GLM 5.2/5.3/5.3-Flash、Doubao Seed 2.1 Pro、Kimi K3、Qwen3.7/3.8 系列等。完整列表见 `index.mjs` 的 `MODEL_META`。

@@ -19,7 +19,8 @@
 import { readFileSync } from "node:fs"
 
 const PROVIDER = "volcengine-apigw"
-const PLUGIN_VERSION = "0.3.0"
+const PROVIDER_ANTHROPIC = "volcengine-apigw-anthropic"
+const PLUGIN_VERSION = "0.4.0"
 
 // ---- 数值格式化（万/亿，中文风格）----
 
@@ -40,6 +41,23 @@ function apiBase(auth) {
   if (!raw) return ""
   // 用户可能把 /v1 一起粘进来：先剥掉再统一拼一次，避免 /v1/v1
   return `${raw.replace(/\/v1$/i, "")}/v1`
+}
+
+// Anthropic SDK 默认发 x-api-key，但网关鉴权用 Authorization: Bearer。
+// 用自定义 fetch 拦截请求：删掉 x-api-key，注入 Authorization: Bearer。
+// anthropic-version 头保留（网关可能需要或忽略，无害）。
+function bearerFetch(key) {
+  return async (input, init = {}) => {
+    const req = input instanceof Request ? input : null
+    const headers = new Headers(init.headers ?? req?.headers ?? undefined)
+    headers.delete("x-api-key")
+    headers.set("authorization", `Bearer ${key}`)
+    if (req && init.body === undefined) {
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.text()
+      return fetch(input, { method: req.method, headers, body, signal: init.signal ?? req.signal })
+    }
+    return fetch(input, { ...init, headers })
+  }
 }
 
 // 静态模型元数据（来源：本机 pi 的 volcengine-apigw/* 配置）
@@ -483,6 +501,153 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
   // 按账号列出网关上的模型（从 /v1/models 动态获取，含 credit 倍率）
   provider: {
     id: PROVIDER,
+    async models(provider, { auth } = {}) {
+      if (auth?.type !== "api") return provider.models
+      const base = apiBase(auth)
+      if (!base) return provider.models
+      try {
+        const res = await fetch(`${base}/models`, {
+          headers: { authorization: `Bearer ${auth.key}` },
+          signal: AbortSignal.timeout(10000),
+        })
+        if (!res.ok) {
+          // 401/403 时标记需重新登录；其他错误保留原列表
+          if (res.status === 401 || res.status === 403)
+            throw Object.assign(new Error("Key 失效"), { signIn: "expired" })
+          return provider.models
+        }
+        const body = await res.json()
+        // 不调用 client.auth.set：它会把整个 auth 对象替换成 body，
+        // 抹掉 type/key/metadata，导致后续 loader 拿不到 baseURL/apiKey，
+        // SDK 回退到内置 api(ark) → 401。consumer ID 改由 usage 钩子从响应里取。
+        const built = buildModels(body?.data)
+        return built || provider.models
+      } catch (e) {
+        if (e?.signIn === "expired") throw e
+        return provider.models
+      }
+    },
+  },
+})
+
+export const VolcengineAnthropicPlugin = async ({ client }) => ({
+  config: async (cfg) => {
+    cfg.provider ??= {}
+    cfg.provider[PROVIDER_ANTHROPIC] ??= {
+      name: "火山引擎 APIG 网关 (Anthropic)",
+      npm: "@ai-sdk/anthropic",
+      models: {},
+    }
+  },
+
+  auth: {
+    provider: PROVIDER_ANTHROPIC,
+
+    methods: [
+      {
+        type: "api",
+        label: "火山引擎 APIG 网关 API Key (Anthropic)",
+        placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        prompts: [
+          {
+            type: "text",
+            key: "gatewayBaseUrl",
+            message: "网关基础地址 (gatewayBaseUrl)",
+            placeholder: "https://xxxxxxxxxx.apigateway-cn-beijing.volceapi.com",
+            validate: (v) => {
+              if (!v || !v.trim()) return "网关地址必填"
+              try {
+                const u = new URL(v.trim())
+                if (u.protocol !== "http:" && u.protocol !== "https:")
+                  return "必须是 http(s) URL"
+              } catch {
+                return "地址格式非法"
+              }
+              return undefined
+            },
+          },
+        ],
+      },
+    ],
+
+    async loader(getAuth) {
+      const auth = await getAuth()
+      if (auth?.type !== "api") return {}
+      const base = apiBase(auth)
+      if (!base) return {}
+      return {
+        baseURL: base,
+        apiKey: auth.key,
+        fetch: bearerFetch(auth.key),
+        headers: { "x-magpie-plugin": `volcengine-usage-anthropic/${PLUGIN_VERSION}` },
+      }
+    },
+
+    async usage(getAuth) {
+      const auth = await getAuth()
+      if (auth?.type !== "api") return { error: "未登录", windows: [] }
+      const base = apiBase(auth)
+      if (!base) return { error: "缺少网关地址（重新登录配置）", windows: [] }
+
+      const key = auth.key
+      // 第一阶段：summary（必需，失败直接报错）
+      const [todayR, weekR, monthR] = await Promise.allSettled([
+        fetchSummary(base, key, "today"),
+        fetchSummary(base, key, "week"),
+        fetchSummary(base, key, "month"),
+      ])
+      // 任一返回 401/403 → Key 失效，精确标记账号需重新登录
+      const signInExpired = [todayR, weekR, monthR].some(
+        (r) => r.status === "rejected" && r.reason?.signIn === "expired"
+      )
+      if (signInExpired) {
+        return {
+          error: "Key 失效，请重新登录",
+          signIn: "expired",
+          windows: [],
+        }
+      }
+      const today = todayR.status === "fulfilled" ? todayR.value : null
+      const week = weekR.status === "fulfilled" ? weekR.value : null
+      const month = monthR.status === "fulfilled" ? monthR.value : null
+
+      if (!today && !week && !month) {
+        const err = todayR.status === "rejected"
+          ? `用量接口不可达: ${todayR.reason?.message || todayR.reason}`
+          : "用量接口未部署或返回错误（/v1/usage/summary）"
+        return { error: err, windows: [] }
+      }
+
+      // 第二阶段：by-model + catalog（用于 Credit，失败优雅降级）
+      const [todayByModelR, weekByModelR, monthByModelR, catalogR] = await Promise.allSettled([
+        fetchByModel(base, key, "today"),
+        fetchByModel(base, key, "week"),
+        fetchByModel(base, key, "month"),
+        fetchModelCatalog(base, key),
+      ])
+      const catalog = catalogR.status === "fulfilled" ? catalogR.value : null
+      const todayCredit = todayByModelR.status === "fulfilled" ? creditFromRows(todayByModelR.value, catalog) : null
+      const weekCredit = weekByModelR.status === "fulfilled" ? creditFromRows(weekByModelR.value, catalog) : null
+      const monthCredit = monthByModelR.status === "fulfilled" ? creditFromRows(monthByModelR.value, catalog) : null
+
+      const windows = []
+      const todayW = today && buildWindow("今日 (UTC+8)", today, todayCredit, readCreditLimit("今日"))
+      const weekW = week && buildWindow("本周 (UTC+8)", week, weekCredit, readCreditLimit("本周"))
+      const monthW = month && buildWindow("本月 (UTC+8)", month, monthCredit, readCreditLimit("本月"))
+      if (todayW) windows.push(todayW)
+      if (weekW) windows.push(weekW)
+      if (monthW) windows.push(monthW)
+
+      return {
+        plan: "火山引擎 APIG 网关 (Anthropic)",
+        user: auth.accountId || today?.consumer || week?.consumer || month?.consumer,
+        windows,
+      }
+    },
+  },
+
+  provider: {
+    id: PROVIDER_ANTHROPIC,
     async models(provider, { auth } = {}) {
       if (auth?.type !== "api") return provider.models
       const base = apiBase(auth)
