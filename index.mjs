@@ -379,7 +379,7 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
   config: async (cfg) => {
     cfg.provider ??= {}
     cfg.provider[PROVIDER] ??= {
-      name: "火山引擎 APIG 网关",
+      name: "火山引擎 APIG 网关 (OpenAI)",
       npm: "@ai-sdk/openai-compatible",
       models: {},
     }
@@ -394,7 +394,7 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
     methods: [
       {
         type: "api",
-        label: "火山引擎 APIG 网关 API Key",
+        label: "火山引擎 APIG 网关 API Key (OpenAI)",
         placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
         prompts: [
           {
@@ -491,7 +491,7 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
       if (monthW) windows.push(monthW)
 
       return {
-        plan: "火山引擎 APIG 网关",
+        plan: "火山引擎 APIG 网关 (OpenAI)",
         user: auth.accountId || today?.consumer || week?.consumer || month?.consumer,
         windows,
       }
