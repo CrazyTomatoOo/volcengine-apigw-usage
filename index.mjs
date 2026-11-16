@@ -21,6 +21,7 @@ import { readFileSync } from "node:fs"
 const PROVIDER = "volcengine-apigw"
 const PROVIDER_ANTHROPIC = "volcengine-apigw-anthropic"
 const PLUGIN_VERSION = "0.4.0"
+const DEFAULT_GATEWAY_BASE_URL = "https://st8tp3ajl0df3n8b8l8qu.apigateway-cn-beijing.volceapi.com"
 
 // ---- 数值格式化（万/亿，中文风格）----
 
@@ -37,8 +38,9 @@ function fmtTokens(n) {
 // 网关对裸 /chat/completions 的所有模型都回 404 model_not_found（2026-10-26 实测），
 // 所以 baseURL 必须显式带 /v1。/v1/models、/v1/usage/* 同理。
 function apiBase(auth) {
+  // 留空回退默认网关地址
   const raw = (auth?.metadata?.gatewayBaseUrl || "").trim().replace(/\/+$/, "")
-  if (!raw) return ""
+    || DEFAULT_GATEWAY_BASE_URL
   // 用户可能把 /v1 一起粘进来：先剥掉再统一拼一次，避免 /v1/v1
   return `${raw.replace(/\/v1$/i, "")}/v1`
 }
@@ -400,10 +402,10 @@ export const VolcengineUsagePlugin = async ({ client }) => ({
           {
             type: "text",
             key: "gatewayBaseUrl",
-            message: "网关基础地址 (gatewayBaseUrl)",
-            placeholder: "https://xxxxxxxxxx.apigateway-cn-beijing.volceapi.com",
+            message: "网关基础地址 (留空使用默认)",
+            placeholder: DEFAULT_GATEWAY_BASE_URL,
             validate: (v) => {
-              if (!v || !v.trim()) return "网关地址必填"
+              if (!v || !v.trim()) return undefined
               try {
                 const u = new URL(v.trim())
                 if (u.protocol !== "http:" && u.protocol !== "https:")
@@ -552,10 +554,10 @@ export const VolcengineAnthropicPlugin = async ({ client }) => ({
           {
             type: "text",
             key: "gatewayBaseUrl",
-            message: "网关基础地址 (gatewayBaseUrl)",
-            placeholder: "https://xxxxxxxxxx.apigateway-cn-beijing.volceapi.com",
+            message: "网关基础地址 (留空使用默认)",
+            placeholder: DEFAULT_GATEWAY_BASE_URL,
             validate: (v) => {
-              if (!v || !v.trim()) return "网关地址必填"
+              if (!v || !v.trim()) return undefined
               try {
                 const u = new URL(v.trim())
                 if (u.protocol !== "http:" && u.protocol !== "https:")
