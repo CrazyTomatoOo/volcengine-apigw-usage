@@ -20,7 +20,7 @@ import { readFileSync } from "node:fs"
 
 const PROVIDER = "volcengine-apigw"
 const PROVIDER_ANTHROPIC = "volcengine-apigw-anthropic"
-const PLUGIN_VERSION = "0.4.0"
+const PLUGIN_VERSION = "0.5.0"
 const DEFAULT_GATEWAY_BASE_URL = "https://st8tp3ajl0df3n8b8l8qu.apigateway-cn-beijing.volceapi.com"
 
 // ---- 数值格式化（万/亿，中文风格）----
