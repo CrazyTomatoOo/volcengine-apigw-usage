@@ -17,10 +17,57 @@
  */
 
 import { readFileSync } from "node:fs"
+import { join } from "node:path"
 
 const PROVIDER = "volcengine-apigw"
-const PLUGIN_VERSION = "0.6.0"
+const LEGACY_ANTHROPIC_PROVIDER = "volcengine-apigw-anthropic"
+const PLUGIN_SPEC = "github:CrazyTomatoOo/volcengine-apigw-usage"
+const PLUGIN_VERSION = "0.6.1"
 const DEFAULT_GATEWAY_BASE_URL = "https://st8tp3ajl0df3n8b8l8qu.apigateway-cn-beijing.volceapi.com"
+
+function readConfigJSON(directory, name) {
+  if (!directory) return null
+  try {
+    return JSON.parse(readFileSync(join(directory, name), "utf8"))
+  } catch {
+    return null
+  }
+}
+
+function legacyAuthKeys(auth) {
+  if (!auth || typeof auth !== "object") return []
+  return Object.keys(auth).filter(
+    (key) => key === LEGACY_ANTHROPIC_PROVIDER || key.startsWith(`${LEGACY_ANTHROPIC_PROVIDER}#`)
+  )
+}
+
+function legacyProviderListed(directory) {
+  const listed = readConfigJSON(directory, "plugin-providers.json")
+  if (!Array.isArray(listed)) return false
+  return listed.some((provider) => {
+    if (provider?.id !== LEGACY_ANTHROPIC_PROVIDER) return false
+    const spec = provider.spec
+    return !spec || spec === PLUGIN_SPEC || spec === "volcengine-apigw" || String(spec).includes("volcengine-apigw-usage")
+  })
+}
+
+// 0.6.0 stopped registering the Anthropic provider. magpie keeps its last
+// provider listing while a plugin fails to load, so an upgrade can leave the
+// removed provider on the Plugins page until something invalidates that
+// cache. Removing an auth, even one already gone, emits magpie's auth event,
+// which drops the cache and lists the plugin again.
+async function retireLegacyAnthropic(client, directory) {
+  const keys = legacyAuthKeys(readConfigJSON(directory, "plugin-auth.json"))
+  if (!legacyProviderListed(directory) && keys.length === 0) return
+  if (typeof client?.auth?.remove !== "function") return
+  for (const key of new Set([LEGACY_ANTHROPIC_PROVIDER, ...keys])) {
+    try {
+      await client.auth.remove({ path: { id: key } })
+    } catch {
+      // Failing here must not stop the plugin from loading.
+    }
+  }
+}
 
 // ---- 数值格式化（万/亿，中文风格）----
 
@@ -358,7 +405,12 @@ function buildWindow(name, summary, credit, limit) {
   }
 }
 
-export const VolcengineUsagePlugin = async ({ client }) => ({
+export const VolcengineUsagePlugin = async ({ client, directory }) => {
+  await retireLegacyAnthropic(client, directory)
+  return volcengineUsageHooks({ client })
+}
+
+const volcengineUsageHooks = ({ client }) => ({
   // 供应商声明：模型由 provider.models 钩子按账号填充
   config: async (cfg) => {
     cfg.provider ??= {}

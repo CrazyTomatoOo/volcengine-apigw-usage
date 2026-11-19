@@ -56,7 +56,7 @@ Claude Code 使用 Anthropic Messages 协议。把它的 base URL 指向 magpie 
 
 插件只注册 `volcengine-apigw` 一个 OpenAI-compatible 提供者，协议转换由 magpie 网关负责。
 
-> **从 0.5.x 升级**：0.6.0 起不再注册 `volcengine-apigw-anthropic`。如果之前登录过它，请把 Claude Code 的模型改为 `volcengine-apigw/<model>`，并执行 `magpie plugin logout volcengine-apigw-anthropic` 清理旧登录。
+> **从 0.5.x 升级**：0.6.0 起不再注册 `volcengine-apigw-anthropic`。0.6.1 会在加载时自动清理残留的旧 provider 缓存和登录；如果之前登录过它，请把 Claude Code 的模型改为 `volcengine-apigw/<model>`。
 
 ## 支持的模型
 

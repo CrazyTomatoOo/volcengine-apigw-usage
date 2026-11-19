@@ -15,4 +15,5 @@
 - 用户只需登录一次，额度面板也只显示一套窗口。
 - 所有 Anthropic 客户端都经过 magpie 的协议转换；Anthropic 特有的 thinking、cache、beta 字段和工具调用语义可能与原生 `/v1/messages` 路径不同。
 - 已选择 `volcengine-apigw-anthropic/<model>` 的用户需要改为 `volcengine-apigw/<model>`，并清理旧登录。
+- 0.6.1 起，插件加载时会检测并清理仍残留的 `volcengine-apigw-anthropic` 登录/缓存，避免升级后 Plugins 页面继续显示已移除的 provider。
 - 如果以后必须要求原生 Anthropic Messages 直通，应重新引入一个独立的 provider，而不是让单一 provider 同时承担两种协议。
